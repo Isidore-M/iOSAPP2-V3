@@ -7,53 +7,58 @@
 
 import SwiftUI
 import PDFKit
-import UIKit
+import UniformTypeIdentifiers
 
-// MARK: - PDFKitView
+struct PDFDocumentWrapper: FileDocument {
+    static var readableContentTypes: [UTType] { [.pdf] }
+    var url: URL
+
+    init(url: URL) { self.url = url }
+    init(configuration: ReadConfiguration) throws { fatalError("Reading not supported") }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        return try FileWrapper(url: url, options: .immediate)
+    }
+}
+
 struct PDFKitView: View {
     let url: URL
     @Environment(\.dismiss) var dismiss
-    
-    @State private var showDocumentPicker = false
-    @State private var showSavedAlert = false
-    
+    @State private var showExporter = false
+
     var body: some View {
         NavigationView {
             PDFKitRepresentedView(url: url)
                 .navigationBarTitle("PDF Report", displayMode: .inline)
                 .toolbar {
-                    // Left: Save Report
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Save Report") {
-                            showDocumentPicker = true
-                        }
+                        Button("Save Report") { showExporter = true }
+                            .fileExporter(
+                                isPresented: $showExporter,
+                                document: PDFDocumentWrapper(url: url),
+                                contentType: .pdf,
+                                defaultFilename: "PlacesReport"
+                            ) { result in
+                                switch result {
+                                case .success(let url):
+                                    print("Saved to: \(url)")
+                                case .failure(let error):
+                                    print("Failed: \(error.localizedDescription)")
+                                }
+                            }
                     }
-                    // Right: Dismiss
+
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Dismiss") {
-                            dismiss()
-                        }
+                        Button("Dismiss") { dismiss() }
                     }
-                }
-                .sheet(isPresented: $showDocumentPicker) {
-                    PDFDocumentPicker(url: url) {
-                        showSavedAlert = true
-                        showDocumentPicker = false
-                    }
-                }
-                .alert("PDF Saved", isPresented: $showSavedAlert) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text("Your PDF report has been saved to Files.")
                 }
         }
     }
 }
 
-// MARK: - PDFKitRepresentedView
 struct PDFKitRepresentedView: UIViewRepresentable {
     let url: URL
-    
+
     func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
         pdfView.document = PDFDocument(url: url)
@@ -62,43 +67,8 @@ struct PDFKitRepresentedView: UIViewRepresentable {
         pdfView.displayDirection = .vertical
         pdfView.usePageViewController(true, withViewOptions: nil)
         pdfView.backgroundColor = .systemBackground
-        pdfView.isUserInteractionEnabled = true
         return pdfView
     }
-    
-    func updateUIView(_ uiView: PDFView, context: Context) {}
-}
 
-// MARK: - PDFDocumentPicker
-struct PDFDocumentPicker: UIViewControllerRepresentable {
-    let url: URL
-    var completion: (() -> Void)? = nil
-    
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forExporting: [url])
-        picker.delegate = context.coordinator
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(completion: completion)
-    }
-    
-    class Coordinator: NSObject, UIDocumentPickerDelegate {
-        var completion: (() -> Void)?
-        
-        init(completion: (() -> Void)?) {
-            self.completion = completion
-        }
-        
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            completion?()
-        }
-        
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            completion?()
-        }
-    }
+    func updateUIView(_ uiView: PDFView, context: Context) {}
 }
