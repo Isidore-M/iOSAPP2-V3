@@ -24,13 +24,15 @@ struct FlippableCardView: View {
     @State private var showingImagePicker = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var isFlipped = false
-    @State private var region: MKCoordinateRegion? = nil
+    @State private var tempRegion: MKCoordinateRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+    )
 
     var body: some View {
         ZStack {
             if !isFlipped {
                 VStack(spacing: 16) {
-                    // Display image
                     if let path = place.imagePath,
                        let uiImage = UIImage(contentsOfFile: path) {
                         Image(uiImage: uiImage)
@@ -39,25 +41,7 @@ struct FlippableCardView: View {
                             .frame(height: 200)
                             .cornerRadius(10)
                             .shadow(radius: 5)
-                            .onAppear {
-                                updateRegionFromImage(at: path)
-                            }
-
-                        // Mini-map with pin
-                        if var region = region {
-                            Map(
-                                coordinateRegion: Binding(get: { region }, set: { region = $0 }),
-                                annotationItems: [MapPin(coordinate: region.center)]
-                            ) { pin in
-                                MapMarker(coordinate: pin.coordinate, tint: .red)
-                            }
-                            .frame(height: 150)
-                            .cornerRadius(10)
-
-                            Text("📍 Lat: \(region.center.latitude), Lon: \(region.center.longitude)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+                            .onAppear { updateLocationFromImage(path: path) }
                     } else {
                         Image(systemName: "photo")
                             .resizable()
@@ -68,7 +52,6 @@ struct FlippableCardView: View {
                             .padding()
                     }
 
-                    // Buttons
                     HStack(spacing: 16) {
                         Button("Select Photo") {
                             imagePickerSource = .photoLibrary
@@ -82,10 +65,8 @@ struct FlippableCardView: View {
                         }
                         .buttonStyle(CardButtonStyle(background: .green))
 
-                        Button("Remove") {
-                            removeImage()
-                        }
-                        .buttonStyle(CardButtonStyle(background: .red))
+                        Button("Remove") { removeImage() }
+                            .buttonStyle(CardButtonStyle(background: .red))
                     }
                     .padding(.horizontal)
                 }
@@ -95,8 +76,8 @@ struct FlippableCardView: View {
                 .shadow(radius: 5)
                 .onTapGesture { flipCard() }
             } else {
-                // Back side
-                VStack {
+                // BACK SIDE
+                VStack(spacing: 16) {
                     Text(place.name)
                         .font(.title)
                         .bold()
@@ -107,6 +88,31 @@ struct FlippableCardView: View {
                         .font(.body)
                         .multilineTextAlignment(.center)
                         .padding()
+
+                    // Map + Coordinates
+                    if let lat = place.latitude, let lon = place.longitude {
+                        let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                        Map(coordinateRegion: $tempRegion,
+                            annotationItems: [MapPin(coordinate: coord)]) { pin in
+                            MapMarker(coordinate: pin.coordinate, tint: .red)
+                        }
+                        .frame(height: 150)
+                        Text("Lat: \(lat), Lon: \(lon)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("No location set. Tap map to choose.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // Allow manual location selection
+                    Map(coordinateRegion: $tempRegion, interactionModes: .all, showsUserLocation: true)
+                        .frame(height: 150)
+                        .cornerRadius(10)
+                        .onTapGesture {
+                            saveManualLocation(region: tempRegion)
+                        }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(white: 0.95))
@@ -114,24 +120,25 @@ struct FlippableCardView: View {
                 .shadow(radius: 5)
                 .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
                 .onTapGesture { flipCard() }
+                .onAppear {
+                    if let lat = place.latitude, let lon = place.longitude {
+                        tempRegion.center = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                    }
+                }
             }
         }
-        .rotation3DEffect(
-            Angle(degrees: rotation),
-            axis: (x: 0, y: 1, z: 0),
-            perspective: 0.6
-        )
+        .rotation3DEffect(Angle(degrees: rotation), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
         .sheet(isPresented: $showingImagePicker) {
             ImagePicker(sourceType: imagePickerSource) { image in
                 if let image = image {
                     viewModel.updateImage(for: place.id, image: image)
                     if let path = viewModel.places.first(where: { $0.id == place.id })?.imagePath {
-                        updateRegionFromImage(at: path)
+                        updateLocationFromImage(path: path)
                     }
                 }
             }
         }
-        .frame(height: 500)
+        .frame(height: 550)
         .padding()
     }
 
@@ -145,23 +152,31 @@ struct FlippableCardView: View {
     private func removeImage() {
         if let index = viewModel.places.firstIndex(where: { $0.id == place.id }) {
             viewModel.places[index].imagePath = nil
+            viewModel.places[index].latitude = nil
+            viewModel.places[index].longitude = nil
             viewModel.savePlaces()
-            region = nil
         }
     }
 
-    private func updateRegionFromImage(at path: String) {
-        if let loc = getLocationFromImage(at: path) {
-            region = MKCoordinateRegion(
-                center: loc,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            )
-        } else {
-            region = nil
+    private func updateLocationFromImage(path: String) {
+        if let coord = getLocationFromImage(path: path) {
+            if let index = viewModel.places.firstIndex(where: { $0.id == place.id }) {
+                viewModel.places[index].latitude = coord.latitude
+                viewModel.places[index].longitude = coord.longitude
+                viewModel.savePlaces()
+            }
         }
     }
 
-    private func getLocationFromImage(at path: String) -> CLLocationCoordinate2D? {
+    private func saveManualLocation(region: MKCoordinateRegion) {
+        if let index = viewModel.places.firstIndex(where: { $0.id == place.id }) {
+            viewModel.places[index].latitude = region.center.latitude
+            viewModel.places[index].longitude = region.center.longitude
+            viewModel.savePlaces()
+        }
+    }
+
+    private func getLocationFromImage(path: String) -> CLLocationCoordinate2D? {
         let imageURL = URL(fileURLWithPath: path)
         guard let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
               let metadata = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
